@@ -1,0 +1,736 @@
+---
+title: "Cluster analysis"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: inline
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, warning=FALSE}
+# install.packages("readxl")
+# install.packages("tidyverse")
+# install.packages("psych")
+# install.packages("psychTools")
+# install.packages("GPArotation")
+# install.packages("corrplot")
+library(corrplot)
+library(readxl)
+library(tidyverse)
+library(psych)
+library(psychTools)
+library(GPArotation)
+library(caret)
+library(cluster)
+library(factoextra)
+library(dplyr)
+library(clue)
+```
+
+# Data Preparation
+
+## Data Importation
+```{r import database}
+df_loan_raw <- read_excel("loan_data_ADA_assignment.xlsx")
+```
+
+## Data Cleaning
+### Remove irrelevant variables
+```{r remove variables}
+# Removal of irrelevant variables
+df_loan <- df_loan_raw[, names(df_loan_raw) %in% c("loan_amnt","int_rate","installment","sub_grade","home_ownership","annual_inc","verification_status","loan_status","dti","open_acc","revol_bal","revol_util","total_acc","total_pymnt","tot_cur_bal","total_credit_rv" )]
+
+# Number of remaining columns
+num_columns <- ncol(df_loan)
+```
+
+
+## Remove NAs value and NONE cathegory in column home_ownership
+```{r}
+#Remove NAs value
+df_loan <- na.omit(df_loan[!is.na(df_loan$tot_cur_bal), ])
+df_loan <- na.omit(df_loan[!is.na(df_loan$total_credit_rv), ])
+df_loan <- df_loan[df_loan$home_ownership != "NONE", ]
+
+#check data summary
+summary(df_loan)
+```
+
+### Check duplicate values 
+```{r duplicate values}
+duplicate_rows <- df_loan[duplicated(df_loan), ]
+```
+
+### Encoding Categorical data
+```{r}
+#sub_grade
+# Create a lookup table
+lookup_table <- c("A1" = "1","A2" = "2","A3" = "3","A4" = "4","A5" = "5",
+                  "B1" = "6","B2" = "7","B3" = "8","B4" = "9","B5" = "10",
+                  "C1" = "11","C2" = "12","C3" = "13","C4" = "14","C5" = "15",
+                  "D1" = "16","D2" = "17","D3" = "18","D4" = "19","D5" = "20",
+                  "E1" = "21","E2" = "22","E3" = "23","E4" = "24","E5" = "25",
+                  "F1" = "26","F2" = "27","F3" = "28","F4" = "29","F5" = "30",
+                  "G1" = "31","G2" = "32","G3" = "33","G4" = "34","G5" = "35")
+df_loan$sub_grade<- as.numeric(lookup_table[df_loan$sub_grade])
+
+#home_ownership
+lookup_table <- c("OWN" = "1","RENT" = "2","MORTGAGE" = "3","OTHER" = "4")
+df_loan$home_ownership<- as.numeric(lookup_table[df_loan$home_ownership])
+
+#verification_status
+lookup_table <- c("Verified" = "1","Source Verified" = "2","Not Verified" = "3")
+df_loan$verification_status<- as.numeric(lookup_table[df_loan$verification_status])
+
+#loan_status
+lookup_table <- c("Fully Paid" = "1","Current" = "2","In Grace Period" = "3","Late (16-30 days)" = "4","Late (31-120 days)" = "5","Charged Off" = "6","Default" = "7")
+df_loan$loan_status<- as.numeric(lookup_table[df_loan$loan_status])
+
+#check data summary
+summary(df_loan)
+
+```
+
+## Random sampling
+```{r}
+# first sample set 
+# Set the seed for reproducibility
+set.seed(99)
+# Perform random sampling
+sampled_indices <- sample(nrow(df_loan), 500)  # Sample 500 rows without replacement
+samp_df_loan <- df_loan[sampled_indices, ]
+
+```
+
+```{r}
+# second sample set
+# Set the seed for reproducibility
+set.seed(80)
+# Perform random sampling
+sampled_indices_1 <- sample(nrow(df_loan), 500)  # Sample 500 rows without replacement
+samp_df_loan_1 <- df_loan[sampled_indices_1, ]
+
+```
+
+## Normalize Data
+```{r}
+# Set column to normalized
+numeric_cols <- sapply(samp_df_loan, is.numeric)
+
+# Normalize numeric columns
+norm_samp_df_loan <- as.data.frame(scale(samp_df_loan[numeric_cols]))
+
+# Set column to normalized
+numeric_cols_1 <- sapply(samp_df_loan_1, is.numeric)
+
+# Normalize numeric columns
+norm_samp_df_loan_1 <- as.data.frame(scale(samp_df_loan_1[numeric_cols_1]))
+
+```
+
+## Multivariate Outlier check
+```{r}
+# Mahalanobi distance
+
+Maha <- mahalanobis(norm_samp_df_loan ,colMeans(norm_samp_df_loan),cov(norm_samp_df_loan))
+Maha_1 <- mahalanobis(norm_samp_df_loan_1 ,colMeans(norm_samp_df_loan_1),cov(norm_samp_df_loan_1))
+
+```
+
+```{r}
+# The p value for each Mahalanobis distance
+
+MahaPvalue <-pchisq(Maha,df=15,lower.tail = FALSE)
+MahaPvalue_1 <-pchisq(Maha_1,df=15,lower.tail = FALSE)
+
+```
+
+
+```{r}
+# Identify potential outlier (a p-value that is less than 0.001)
+
+print(sum(MahaPvalue<0.001))
+print(sum(MahaPvalue_1<0.001))
+
+```
+
+```{r}
+# Remove the potential outlier
+
+# Identify observations with p-values less than 0.001
+Maha_outliers <- MahaPvalue < 0.001
+Maha_outliers_1 <- MahaPvalue_1 < 0.001
+
+# Remove observations with p-values less than 0.001
+filtered_norm_samp_df_loan <- norm_samp_df_loan[!Maha_outliers, ]
+filtered_norm_samp_df_loan_1 <- norm_samp_df_loan_1[!Maha_outliers_1, ]
+
+```
+
+# PCA
+
+```{r, PCA application}
+#Check assumption
+filtered_norm_samp_df_loan_matrix <-round(cor(filtered_norm_samp_df_loan),2)
+corrplot(filtered_norm_samp_df_loan_matrix)
+KMO(filtered_norm_samp_df_loan)
+```
+
+There are some high correlation among the variables that shown in the graph.
+
+The Kaiser-Meyer-Olkin (KMO) test is a standard to assess the suitability of a data set for PCA. You are looking for a KMO value of 0.5 or more. Here it is 0.66, so we are good.
+
+```{r, PCA}
+samp_loan_pca <- principal(filtered_norm_samp_df_loan, 16, rotate="none", weights=TRUE, scores=TRUE)
+print(samp_loan_pca)
+print.psych(samp_loan_pca, cut=0.3, sort=TRUE)
+plot(samp_loan_pca$values, type="b")
+samp_loan_pca$weights
+sample_loan_updated <- samp_loan_pca$scores[,1:8]
+```
+
+Since our goal is to express the original variables via a new uncorrelated variables for further cluster analysis. Then we can keep all PCs that explain almost 90% of the information. In this case, will be the first 8 PCs.
+
+
+# Factor Analysis
+
+## PC extraction with Orthogonal rotation
+```{r}
+pcModel3q<-principal(filtered_norm_samp_df_loan, 3, rotate="quartimax")
+print.psych(pcModel3q, cut=0.3, sort=TRUE)
+fa.diagram(pcModel3q)
+```
+
+```{r}
+pcModel4q<-principal(filtered_norm_samp_df_loan, 4, rotate="quartimax")
+print.psych(pcModel4q, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4q)
+```
+
+## PC extraction with Oblique rotation
+```{r}
+pcModel3o<-principal(filtered_norm_samp_df_loan, 3, rotate="oblimin")
+print.psych(pcModel3o, cut=0.3, sort=TRUE)
+fa.diagram(pcModel3o)
+```
+
+
+```{r}
+pcModel4o<-principal(filtered_norm_samp_df_loan, 4, rotate="oblimin")
+print.psych(pcModel4o, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4o)
+```
+
+
+## Remove total_credit_rv and revol_bal
+```{r}
+fa_loan <- subset(filtered_norm_samp_df_loan, select = -c(total_credit_rv, revol_bal))
+fa_loan_1 <- subset(filtered_norm_samp_df_loan_1, select = -c(total_credit_rv, revol_bal))
+```
+
+#Factor 4 PC oblique rotate
+```{r}
+pcModel4o1<-principal(fa_loan, 4, rotate="oblimin")
+print.psych(pcModel4o1, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4o1)
+
+pcModel4o1_1<-principal(fa_loan_1, 4, rotate="oblimin")
+print.psych(pcModel4o1_1, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4o1_1)
+```
+
+```{r}
+pcModel4q1<-principal(fa_loan, 4, rotate="quartimax")
+print.psych(pcModel4q1, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4q1)
+
+pcModel4q1_1<-principal(fa_loan_1, 4, rotate="quartimax")
+print.psych(pcModel4q1_1, cut=0.3, sort=TRUE)
+fa.diagram(pcModel4q1_1)
+
+```
+
+Set scores to regression
+choose pcModel4q as the best solution
+```{r}
+pcModel4o1 <-principal(fa_loan, 4, rotate="oblimin", scores=TRUE)
+fscores <- pcModel4o1$scores
+describe(fscores)
+FscoresMatrix<-cor(fscores)
+print(FscoresMatrix)
+head(fscores, 10)
+
+lowerCor(fscores)
+```
+
+## CLUSTER ANALYSIS
+
+## Cluster Analysis of sampling set.seed(99) - 500 Samples
+
+# perform hierarchical clustering using several different methods
+
+```{r}
+# Define linkage methods
+
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+```
+
+```{r}
+# Function to compute agglomerative coefficient
+
+ac <- function(x) {
+agnes(fscores, method = x)$ac
+}
+
+```
+
+```{r}
+# Calculate agglomerative coefficient for each clustering linkage method
+
+sapply(m, ac)
+
+# We can see that Ward’s minimum variance method produces the highest agglomerative coefficient, thus we’ll use that as the method for our final hierarchical clustering
+```
+
+```{r}
+# calculate gap statistic for each number of clusters (up to 10 clusters)
+
+gap_stat_h <- clusGap(fscores, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+
+gap_stat_k <- clusGap(fscores, FUN = kmeans, nstart = 25, K.max = 10, B = 50)
+
+```
+
+```{r}
+# produce plot of clusters vs. gap statistic
+
+fviz_gap_stat(gap_stat_h)
+
+fviz_gap_stat(gap_stat_k)
+```
+
+
+```{r}
+# Finding distance matrix using 3 different distance
+
+distance_mat1 <- dist(fscores, method = 'euclidean')
+distance_mat2 <- dist(fscores, method = 'maximum')
+distance_mat3 <- dist(fscores, method = 'manhattan')
+
+```
+
+```{r}
+# Fitting Hierarchical clustering Model to dataset
+
+set.seed(99)  # Setting seed
+Hierar_cl_eu <- hclust(distance_mat1, method = "ward")
+Hierar_cl_max <- hclust(distance_mat2, method = "ward")
+Hierar_cl_man <- hclust(distance_mat3, method = "ward")
+
+
+```
+
+
+```{r}
+# Plotting dendrogram
+
+plot(Hierar_cl_eu)
+plot(Hierar_cl_max)
+plot(Hierar_cl_man)
+
+#suggest 4 group
+```
+
+# 3 Clusters - 500 samples
+
+Hierarchical Euclidean 
+
+```{r}
+
+# Cutting tree by no. of clusters
+fit_3_eu <- cutree(Hierar_cl_eu, k = 3 )
+fit_3_eu
+
+# Find number of observations in each cluster
+table(fit_3_eu)
+
+# Append cluster labels to original data
+final_data_3_eu <- cbind(fscores, cluster = fit_3_eu)
+
+# Display first six rows of final data
+head(final_data_3_eu)
+
+# Find mean values for each cluster
+hcentres_3_eu <-aggregate(x=final_data_3_eu, by=list(cluster=fit_3_eu), FUN="mean")
+print(hcentres_3_eu)
+
+```
+
+Hierarchical Maximum  
+```{r}
+
+# Cutting tree by no. of clusters
+fit_3_max <- cutree(Hierar_cl_max, k = 3 )
+fit_3_max
+
+# Find number of observations in each cluster
+table(fit_3_max)
+
+# Append cluster labels to original data
+final_data_3_max <- cbind(fscores, cluster = fit_3_max)
+
+# Display first six rows of final data
+head(final_data_3_max)
+
+# Find mean values for each cluster
+hcentres_3_max <-aggregate(x=final_data_3_max, by=list(cluster=fit_3_max), FUN="mean")
+print(hcentres_3_max)
+
+```
+
+Hierarchical Manhattan  
+```{r}
+
+# Cutting tree by no. of clusters
+fit_3_man <- cutree(Hierar_cl_man, k = 3 )
+fit_3_man
+
+# Find number of observations in each cluster
+table(fit_3_man)
+
+# Append cluster labels to original data
+final_data_3_man <- cbind(fscores, cluster = fit_3_man)
+
+# Display first six rows of final data
+head(final_data_3_man)
+
+# Find mean values for each cluster
+hcentres_3_man <-aggregate(x=final_data_3_man, by=list(cluster=fit_3_man), FUN="mean")
+print(hcentres_3_man)
+
+```
+
+K-mean (Non-Hierarchical)
+```{r}
+# Kmeans clustering
+
+set.seed(99)
+k_cl3 <- kmeans(fscores,3,nstart=25)
+k_cl3 
+
+```
+
+
+## Cluster Analysis of 100 samples from filtered_norm_samp_df_loan to validate - Internal Validation
+
+# Random sampling
+```{r}
+
+# Set the seed for reproducibility
+set.seed(85)
+
+# Perform random sampling
+validate_indices <- sample(nrow(fa_loan), 100)  # Sample 100 rows without replacement
+validate_samp_df_loan <- fa_loan[validate_indices, ]
+
+```
+
+```{r}
+validate_pcModel4o1 <-principal(validate_samp_df_loan, 4, rotate="oblimin", scores=TRUE)
+validate_fscores <- validate_pcModel4o1$scores
+
+describe(validate_fscores)
+validate_FscoresMatrix <- cor(validate_fscores)
+print(validate_FscoresMatrix)
+head(validate_fscores, 10)
+
+lowerCor(validate_fscores)
+```
+
+```{r}
+# Define linkage methods
+
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+```
+
+```{r}
+# Function to compute agglomerative coefficient
+
+ac <- function(x) {
+agnes(validate_fscores, method = x)$ac
+}
+
+```
+
+```{r}
+# Calculate agglomerative coefficient for each clustering linkage method
+
+sapply(m, ac)
+
+# We can see that Ward’s minimum variance method produces the highest agglomerative coefficient, thus we’ll use that as the method for our final hierarchical clustering
+```
+
+
+```{r}
+# calculate gap statistic for each number of clusters (up to 10 clusters)
+
+validate_gap_stat_h <- clusGap(validate_fscores, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+
+validate_gap_stat_k <- clusGap(validate_fscores, FUN = kmeans, nstart = 25, K.max = 10, B = 50)
+
+```
+
+```{r}
+# produce plot of clusters vs. gap statistic
+
+fviz_gap_stat(validate_gap_stat_h)
+
+fviz_gap_stat(validate_gap_stat_k)
+```
+
+
+```{r}
+# Finding distance matrix using 3 different distance
+
+validate_distance_mat1 <- dist(validate_fscores, method = 'euclidean')
+validate_distance_mat2 <- dist(validate_fscores, method = 'maximum')
+validate_distance_mat3 <- dist(validate_fscores, method = 'manhattan')
+
+```
+
+```{r}
+# Fitting Hierarchical clustering Model to dataset
+
+set.seed(85)  # Setting seed
+validate_Hierar_cl_eu <- hclust(validate_distance_mat1, method = "ward")
+validate_Hierar_cl_max <- hclust(validate_distance_mat2, method = "ward")
+validate_Hierar_cl_man <- hclust(validate_distance_mat3, method = "ward")
+
+
+```
+
+
+```{r}
+# Plotting dendrogram
+
+plot(validate_Hierar_cl_eu)
+plot(validate_Hierar_cl_max)
+plot(validate_Hierar_cl_man)
+
+#suggest 4 group
+```
+
+# 3 Clusters - 100 Samples
+
+Hierarchical Euclidean 
+
+```{r}
+
+# Cutting tree by no. of clusters
+validate_fit_3_eu <- cutree(validate_Hierar_cl_eu, k = 3 )
+validate_fit_3_eu
+
+# Find number of observations in each cluster
+table(validate_fit_3_eu)
+
+# Append cluster labels to original data
+validate_final_data_3_eu <- cbind(validate_fscores, cluster = validate_fit_3_eu)
+
+# Display first six rows of final data
+head(validate_final_data_3_eu)
+
+# Find mean values for each cluster
+validate_hcentres_3_eu <-aggregate(x=validate_final_data_3_eu, by=list(cluster=validate_fit_3_eu), FUN="mean")
+print(validate_hcentres_3_eu)
+
+```
+
+Hierarchical Maximum  
+```{r}
+
+# Cutting tree by no. of clusters
+validate_fit_3_max <- cutree(validate_Hierar_cl_max, k = 3 )
+validate_fit_3_max
+
+# Find number of observations in each cluster
+table(validate_fit_3_max)
+
+# Append cluster labels to original data
+validate_final_data_3_max <- cbind(validate_fscores, cluster = validate_fit_3_max)
+
+# Display first six rows of final data
+head(validate_final_data_3_max)
+
+# Find mean values for each cluster
+validate_hcentres_3_max <-aggregate(x=validate_final_data_3_max, by=list(cluster=validate_fit_3_max), FUN="mean")
+print(validate_hcentres_3_max)
+
+```
+
+Hierarchical Manhattan  
+```{r}
+
+# Cutting tree by no. of clusters
+validate_fit_3_man <- cutree(validate_Hierar_cl_man, k = 3 )
+validate_fit_3_man
+
+# Find number of observations in each cluster
+table(validate_fit_3_man)
+
+# Append cluster labels to original data
+validate_final_data_3_man <- cbind(validate_fscores, cluster = validate_fit_3_man)
+
+# Display first six rows of final data
+head(validate_final_data_3_man)
+
+# Find mean values for each cluster
+validate_hcentres_3_man <-aggregate(x=validate_final_data_3_man, by=list(cluster=validate_fit_3_man), FUN="mean")
+print(validate_hcentres_3_man)
+
+```
+
+K-mean (Non-Hierarchical)
+```{r}
+# Kmeans clustering
+
+set.seed(85)
+validate_k_cl3 <- kmeans(validate_fscores,3,nstart=25)
+validate_k_cl3 
+
+```
+
+# Validate - Accuracy Rate
+
+check different if value are assign to the same cluster to validate
+
+Euclidean
+```{r}
+
+Validate_table_3_eu <- data.frame(fit_3_eu)
+Validate_table_3_eu <- Validate_table_3_eu[validate_indices, ]
+
+df_fit_validate_3_eu <- data.frame(Difference= Validate_table_3_eu - validate_fit_3_eu)
+
+
+# Count the number of 0s in 'Column1'_zero
+num_zeros_3_eu <- nrow(filter(df_fit_validate_3_eu,Difference == 0))
+
+# Calculate the total number of rows in the dataframe
+total_rows_3_eu <- nrow(df_fit_validate_3_eu)
+
+# Calculate the proportion of zeros
+proportion_zeros_3_eu <- num_zeros_3_eu / total_rows_3_eu
+
+# Print the proportion of the correctly assign cluster
+print(proportion_zeros_3_eu)
+
+```
+Maximum
+```{r}
+
+Validate_table_3_max <- data.frame(fit_3_max)
+Validate_table_3_max <- Validate_table_3_max[validate_indices, ]
+
+df_fit_validate_3_max <- data.frame(Difference= Validate_table_3_max - validate_fit_3_max)
+
+
+# Count the number of 0s in 'Column1'_zero
+num_zeros_3_max <- nrow(filter(df_fit_validate_3_max,Difference == 0))
+
+# Calculate the total number of rows in the dataframe
+total_rows_3_max <- nrow(df_fit_validate_3_max)
+
+# Calculate the proportion of zeros
+proportion_zeros_3_max <- num_zeros_3_max / total_rows_3_max
+
+# Print the proportion of the correctly assign cluster
+print(proportion_zeros_3_max)
+
+```
+Manhattan
+```{r}
+
+Validate_table_3_man <- data.frame(fit_3_man)
+Validate_table_3_man <- Validate_table_3_man[validate_indices, ]
+
+df_fit_validate_3_man <- data.frame(Difference= Validate_table_3_man - validate_fit_3_man)
+
+
+# Count the number of 0s in 'Column1'_zero
+num_zeros_3_man <- nrow(filter(df_fit_validate_3_man,Difference == 0))
+
+# Calculate the total number of rows in the dataframe
+total_rows_3_man <- nrow(df_fit_validate_3_man)
+
+# Calculate the proportion of zeros
+proportion_zeros_3_man <- num_zeros_3_man / total_rows_3_man
+
+# Print the proportion of the correctly assign cluster
+print(proportion_zeros_3_man)
+
+```
+K-mean
+```{r}
+
+df_kmean_valid_3 <- data.frame(k_cl3["cluster"])
+df_kmean_valid_3 <- df_kmean_valid_3[validate_indices, ]
+
+K_validate_3 <- cl_predict(k_cl3,newdata = validate_fscores)
+
+df_kfit_validate_3 <- data.frame(Difference= df_kmean_valid_3 - K_validate_3 )
+
+
+# Count the number of 0s in 'Column1'_zero
+num_zeros_k_3 <- nrow(filter(df_kfit_validate_3,Difference == 0))
+
+# Calculate the total number of rows in the dataframe
+total_rows_k_3 <- nrow(df_kfit_validate_3)
+
+# Calculate the proportion of zeros
+proportion_zeros_k_3 <- num_zeros_k_3 / total_rows_k_3
+
+# Print the proportion of the correctly assign cluster
+print(proportion_zeros_k_3)
+
+
+```
+Recluster K-mean
+```{r}
+
+New_K_CLust <- df_kmean_valid_3 - data.frame(validate_k_cl3["cluster"])
+New_K_CLust
+
+# Count the number of 0s in 'Column1'_zero
+num_zeros_k_3_re <- nrow(filter(New_K_CLust ,cluster == 0))
+
+# Calculate the total number of rows in the dataframe
+total_rows_k_3_re <- nrow(New_K_CLust)
+
+# Calculate the proportion of zeros
+proportion_zeros_k_3_re <- num_zeros_k_3_re/total_rows_k_3_re
+
+# Print the proportion of the correctly assign cluster
+print(proportion_zeros_k_3_re)
+
+```
+
+Plot K-mean cluster
+```{r}
+#Visualize clustering results for K = 3
+plot_kcluster <- fviz_cluster(k_cl3, data = fscores, geom = "point")
+plot_kcluster
+
+# Visualize clustering results for K = 3 - validate set
+plot_kcluster_validate <- fviz_cluster(validate_k_cl3 , data = validate_fscores,geom="point")
+plot_kcluster_validate 
+```
+
+
